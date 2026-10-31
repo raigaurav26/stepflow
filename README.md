@@ -41,6 +41,34 @@ LEASED → PENDING   (lease expired: the worker crashed)
 
 Status transitions are enforced in code (`RunStatus`, `StepStatus`) and status values by `CHECK` constraints in the schema.
 
+## Defining a workflow
+
+Register a `WorkflowDefinition` bean. Each step returns a map that is saved as JSON and passed to later steps.
+
+```java
+@Bean
+WorkflowDefinition orderFulfilment(InventoryClient inventory, PaymentClient payments) {
+    return WorkflowDefinition.builder("order-fulfilment")
+            .step("reserve-stock", ctx -> inventory.reserve(ctx.input()))
+            .step("charge-card", 5, ctx -> payments.charge(ctx.outputOf("reserve-stock")))
+            .step("ship", ctx -> Map.of("trackingId", "TRK-1"))
+            .build();
+}
+```
+
+The number after the step name is how many attempts it gets (default 3). Steps should be safe to run twice, because a retry or a crashed worker can repeat one.
+
+## API
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/api/workflows` | Registered workflows and their steps |
+| POST | `/api/runs` | Start a run: `{"workflowType": "order-fulfilment", "input": {...}}` → `201` with `Location` |
+| GET | `/api/runs/{id}` | A run with all of its steps |
+| GET | `/api/runs?limit=20` | Most recent runs |
+
+Starting a run creates it as `PENDING` and queues only its first step. Each later step is queued when the one before it succeeds, so the step table only ever holds work that can run now. Errors use RFC 7807 problem details (`404` unknown run, `422` unknown workflow type, `400` invalid body).
+
 ## Running locally
 
 ```bash
@@ -56,7 +84,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 ## Roadmap
 
 - [x] Project setup, schema and status state machines
-- [ ] Workflow definition API and `POST /runs` to start a run
+- [x] Workflow definition API and `POST /api/runs` to start a run
 - [ ] Worker loop that claims steps with `SELECT ... FOR UPDATE SKIP LOCKED`
 - [ ] Retries with exponential backoff and jitter, dead steps
 - [ ] Saga compensation in reverse order
