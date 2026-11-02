@@ -59,6 +59,10 @@ public class RunRepository {
                 stepMapper, runId);
     }
 
+    RowMapper<StepExecution> stepMapper() {
+        return stepMapper;
+    }
+
     private WorkflowRun mapRun(ResultSet rs, int rowNum) throws SQLException {
         return new WorkflowRun(
                 rs.getObject("id", UUID.class),

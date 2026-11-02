@@ -8,6 +8,13 @@ spring:
   flyway:
     enabled: true
 
+stepflow:
+  worker:
+    enabled: ${STEPFLOW_WORKER_ENABLED:true}
+    threads: 4
+    poll-interval: 500ms
+    lease-duration: 30s
+
 server:
   port: 8080
 

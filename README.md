@@ -69,6 +69,32 @@ The number after the step name is how many attempts it gets (default 3). Steps s
 
 Starting a run creates it as `PENDING` and queues only its first step. Each later step is queued when the one before it succeeds, so the step table only ever holds work that can run now. Errors use RFC 7807 problem details (`404` unknown run, `422` unknown workflow type, `400` invalid body).
 
+## Workers
+
+Each instance runs a small worker pool (`WorkerPool`). A poller thread claims runnable steps and hands them to a fixed number of threads:
+
+```sql
+UPDATE step_executions SET status = 'LEASED', lease_owner = ?, lease_expires_at = now() + ?, attempt = attempt + 1
+ WHERE id IN (SELECT id FROM step_executions
+               WHERE status IN ('PENDING', 'RETRY_SCHEDULED') AND next_run_at <= now()
+               ORDER BY next_run_at LIMIT ?
+                 FOR UPDATE SKIP LOCKED)
+RETURNING *;
+```
+
+- `SKIP LOCKED` lets many workers, across many instances, poll the same table without blocking each other or taking the same step twice. A test runs 8 workers against 300 steps and checks each is claimed exactly once.
+- The poller only claims as many steps as it has free threads, so a busy instance leaves work for the others.
+- Every result is written with `WHERE lease_owner = ?`. A worker that lost its lease can't overwrite the new owner's result.
+- When a step succeeds, the next step is queued in the same transaction. After the last step, the run is `COMPLETED` with that step's output.
+- A failing step is retried until it runs out of attempts. Then it is `DEAD` and the run is `FAILED` with the error.
+
+| Setting | Default | |
+|---|---|---|
+| `stepflow.worker.enabled` | `true` | Turn the pool off for API-only instances |
+| `stepflow.worker.threads` | `4` | Steps run at the same time per instance |
+| `stepflow.worker.poll-interval` | `500ms` | Wait between polls when the queue is empty |
+| `stepflow.worker.lease-duration` | `30s` | How long a claimed step belongs to one worker |
+
 ## Running locally
 
 ```bash
@@ -85,7 +111,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 
 - [x] Project setup, schema and status state machines
 - [x] Workflow definition API and `POST /api/runs` to start a run
-- [ ] Worker loop that claims steps with `SELECT ... FOR UPDATE SKIP LOCKED`
+- [x] Worker pool that claims steps with `SELECT ... FOR UPDATE SKIP LOCKED`
 - [ ] Retries with exponential backoff and jitter, dead steps
 - [ ] Saga compensation in reverse order
 - [ ] Idempotent run start (`Idempotency-Key` header)

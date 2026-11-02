@@ -1,0 +1,4 @@
+# Tests drive workers by hand unless a test turns the pool on.
+stepflow:
+  worker:
+    enabled: false
