@@ -14,7 +14,8 @@ import java.util.Set;
  * WorkflowDefinition orderFulfilment() {
  *     return WorkflowDefinition.builder("order-fulfilment")
  *             .step("reserve-stock", ctx -> inventory.reserve(ctx.input()))
- *             .step("charge-card", 5, ctx -> payments.charge(ctx.input()))
+ *             .step("charge-card", 5, RetryPolicy.exponential(Duration.ofSeconds(2), Duration.ofMinutes(1)),
+ *                     ctx -> payments.charge(ctx.input()))
  *             .build();
  * }
  * }</pre>
@@ -69,7 +70,11 @@ public final class WorkflowDefinition {
         }
 
         public Builder step(String name, int maxAttempts, StepHandler handler) {
-            steps.add(new StepDefinition(name, maxAttempts, handler));
+            return step(name, maxAttempts, null, handler);
+        }
+
+        public Builder step(String name, int maxAttempts, RetryPolicy retryPolicy, StepHandler handler) {
+            steps.add(new StepDefinition(name, maxAttempts, retryPolicy, handler));
             return this;
         }
 

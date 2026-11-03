@@ -1,5 +1,7 @@
 package com.stepflow.worker;
 
+import com.stepflow.definition.NonRetryableException;
+import com.stepflow.definition.RetryPolicy;
 import com.stepflow.definition.StepContext;
 import com.stepflow.definition.StepDefinition;
 import com.stepflow.definition.UnknownWorkflowException;
@@ -17,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 /** Runs one leased step and records what happened. */
 @Component
@@ -29,12 +32,15 @@ public class StepExecutor {
     private final RunService runService;
     private final StepQueue queue;
     private final TransactionTemplate tx;
+    private final RetryPolicy defaultRetryPolicy;
 
-    public StepExecutor(WorkflowRegistry registry, RunService runService, StepQueue queue, TransactionTemplate tx) {
+    public StepExecutor(WorkflowRegistry registry, RunService runService, StepQueue queue,
+                        TransactionTemplate tx, RetryProperties retryProperties) {
         this.registry = registry;
         this.runService = runService;
         this.queue = queue;
         this.tx = tx;
+        this.defaultRetryPolicy = retryProperties.toPolicy();
     }
 
     public void execute(StepExecution step, String workerId) {
@@ -55,8 +61,11 @@ public class StepExecutor {
         Map<String, Object> output;
         try {
             output = definition.handler().execute(context);
+        } catch (NonRetryableException e) {
+            giveUp(step, workerId, describe(e));
+            return;
         } catch (Exception e) {
-            onFailure(step, workerId, describe(e));
+            onFailure(definition, step, workerId, describe(e));
             return;
         }
         onSuccess(workflow, step, workerId, output == null ? Map.of() : output);
@@ -79,11 +88,13 @@ public class StepExecutor {
         });
     }
 
-    private void onFailure(StepExecution step, String workerId, String error) {
+    private void onFailure(StepDefinition definition, StepExecution step, String workerId, String error) {
         if (step.attempt() < step.maxAttempts()) {
-            log.info("Step {} of run {} failed on attempt {}/{}: {}",
-                    step.stepName(), step.runId(), step.attempt(), step.maxAttempts(), error);
-            queue.scheduleRetry(step.id(), workerId, error, Duration.ZERO);
+            Duration delay = definition.retryPolicyOr(defaultRetryPolicy)
+                    .delayAfter(step.attempt(), ThreadLocalRandom.current());
+            log.info("Step {} of run {} failed on attempt {}/{}, retrying in {} ms: {}",
+                    step.stepName(), step.runId(), step.attempt(), step.maxAttempts(), delay.toMillis(), error);
+            queue.scheduleRetry(step.id(), workerId, error, delay);
         } else {
             giveUp(step, workerId, error);
         }

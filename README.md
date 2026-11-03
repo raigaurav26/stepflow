@@ -88,12 +88,32 @@ RETURNING *;
 - When a step succeeds, the next step is queued in the same transaction. After the last step, the run is `COMPLETED` with that step's output.
 - A failing step is retried until it runs out of attempts. Then it is `DEAD` and the run is `FAILED` with the error.
 
+## Retries
+
+A failed step goes to `RETRY_SCHEDULED` with `next_run_at` set in the future, so the wait survives restarts and no thread sleeps through it. The wait grows exponentially, is capped, and has jitter so that many steps failing together (a partner API going down) don't all retry in the same instant:
+
+```
+wait(n) = min(initialDelay * multiplier^(n-1), maxDelay) * (1 - jitter * random)
+```
+
+With the defaults (1s, ×2, 5m cap, 20% jitter) the waits are about 1s, 2s, 4s, 8s … up to 5 minutes. A step can set its own policy:
+
+```java
+.step("charge-card", 5, RetryPolicy.exponential(Duration.ofSeconds(2), Duration.ofMinutes(1)), ctx -> ...)
+```
+
+Throw `NonRetryableException` when trying again can't help (a declined card, invalid input). The step goes straight to `DEAD` without using up its attempts.
+
 | Setting | Default | |
 |---|---|---|
 | `stepflow.worker.enabled` | `true` | Turn the pool off for API-only instances |
 | `stepflow.worker.threads` | `4` | Steps run at the same time per instance |
 | `stepflow.worker.poll-interval` | `500ms` | Wait between polls when the queue is empty |
 | `stepflow.worker.lease-duration` | `30s` | How long a claimed step belongs to one worker |
+| `stepflow.retry.initial-delay` | `1s` | Wait before the first retry |
+| `stepflow.retry.multiplier` | `2.0` | Growth of the wait after each failure |
+| `stepflow.retry.max-delay` | `5m` | Longest wait between attempts |
+| `stepflow.retry.jitter` | `0.2` | Up to this share of the wait is randomly removed |
 
 ## Running locally
 
@@ -112,7 +132,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Project setup, schema and status state machines
 - [x] Workflow definition API and `POST /api/runs` to start a run
 - [x] Worker pool that claims steps with `SELECT ... FOR UPDATE SKIP LOCKED`
-- [ ] Retries with exponential backoff and jitter, dead steps
+- [x] Retries with exponential backoff and jitter, dead steps
 - [ ] Saga compensation in reverse order
 - [ ] Idempotent run start (`Idempotency-Key` header)
 - [ ] Durable timers (`sleep` steps) and scheduled runs
