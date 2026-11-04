@@ -17,7 +17,7 @@ Java 17 · Spring Boot 3 · PostgreSQL 16 · Flyway · JdbcTemplate · JUnit 5 �
 | Concept | Table | Notes |
 |---|---|---|
 | Workflow run | `workflow_runs` | One execution of a workflow, with input, output and an optional idempotency key |
-| Step execution | `step_executions` | One row per step; workers claim runnable rows like a queue |
+| Step execution | `step_executions` | One row per step (`ACTION`) or per undo (`COMPENSATION`); workers claim runnable rows like a queue |
 
 Run lifecycle:
 
@@ -57,6 +57,27 @@ WorkflowDefinition orderFulfilment(InventoryClient inventory, PaymentClient paym
 ```
 
 The number after the step name is how many attempts it gets (default 3). Steps should be safe to run twice, because a retry or a crashed worker can repeat one.
+
+## Saga rollback
+
+Some steps can't be wrapped in one database transaction because they call other systems: a flight is booked, a hotel is booked, then the card is declined. A saga undoes the steps that already happened instead. Give a step a compensation:
+
+```java
+WorkflowDefinition.builder("trip-booking")
+        .step("book-flight", ctx -> airline.book(ctx.input()))
+        .compensateWith(ctx -> airline.cancel(ctx.outputOf("book-flight")))
+        .step("book-hotel", ctx -> hotels.book(ctx.input()))
+        .compensateWith(ctx -> hotels.cancel(ctx.outputOf("book-hotel")))
+        .step("send-itinerary", ctx -> email.send(ctx.input()))   // nothing to undo
+        .step("charge-card", ctx -> payments.charge(ctx.input()))
+        .build();
+```
+
+If `charge-card` fails for good, the run moves to `COMPENSATING` and the hotel is cancelled, then the flight: newest first, skipping steps with nothing to undo. Then the run is `COMPENSATED` and keeps the original error.
+
+- Compensations are rows in the same queue (`kind = 'COMPENSATION'`), so they get the same leasing, retries, backoff and crash safety as normal steps.
+- Each compensation is queued in the same transaction that records the previous one, so a crash mid-rollback picks up where it stopped.
+- If a compensation runs out of attempts, the rollback stops and the run is `FAILED` with both errors. Undoing further could make things worse, so the remaining steps are left for a person to check.
 
 ## API
 
@@ -133,7 +154,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Workflow definition API and `POST /api/runs` to start a run
 - [x] Worker pool that claims steps with `SELECT ... FOR UPDATE SKIP LOCKED`
 - [x] Retries with exponential backoff and jitter, dead steps
-- [ ] Saga compensation in reverse order
+- [x] Saga compensation in reverse order
 - [ ] Idempotent run start (`Idempotency-Key` header)
 - [ ] Durable timers (`sleep` steps) and scheduled runs
 - [ ] Lease expiry recovery when a worker crashes mid-step

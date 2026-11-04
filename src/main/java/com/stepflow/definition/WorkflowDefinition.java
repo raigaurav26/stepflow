@@ -3,6 +3,7 @@ package com.stepflow.definition;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -14,6 +15,7 @@ import java.util.Set;
  * WorkflowDefinition orderFulfilment() {
  *     return WorkflowDefinition.builder("order-fulfilment")
  *             .step("reserve-stock", ctx -> inventory.reserve(ctx.input()))
+ *             .compensateWith(ctx -> inventory.release(ctx.outputOf("reserve-stock")))
  *             .step("charge-card", 5, RetryPolicy.exponential(Duration.ofSeconds(2), Duration.ofMinutes(1)),
  *                     ctx -> payments.charge(ctx.input()))
  *             .build();
@@ -74,7 +76,25 @@ public final class WorkflowDefinition {
         }
 
         public Builder step(String name, int maxAttempts, RetryPolicy retryPolicy, StepHandler handler) {
-            steps.add(new StepDefinition(name, maxAttempts, retryPolicy, handler));
+            steps.add(new StepDefinition(name, maxAttempts, retryPolicy, handler, null));
+            return this;
+        }
+
+        /**
+         * Sets how to undo the step added just before this call. If a later step fails for
+         * good, compensations of the steps that already succeeded run in reverse order. The
+         * compensation can read the step's own output with {@code ctx.outputOf(stepName)}.
+         */
+        public Builder compensateWith(StepHandler compensation) {
+            if (steps.isEmpty()) {
+                throw new IllegalStateException("compensateWith must follow a step");
+            }
+            int last = steps.size() - 1;
+            StepDefinition step = steps.get(last);
+            if (step.hasCompensation()) {
+                throw new IllegalStateException("Step " + step.name() + " already has a compensation");
+            }
+            steps.set(last, step.withCompensation(Objects.requireNonNull(compensation)));
             return this;
         }
 

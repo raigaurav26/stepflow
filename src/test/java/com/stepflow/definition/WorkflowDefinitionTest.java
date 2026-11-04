@@ -56,6 +56,26 @@ class WorkflowDefinitionTest {
     }
 
     @Test
+    void compensationAttachesToTheStepBeforeIt() {
+        StepHandler undo = ctx -> Map.of();
+        WorkflowDefinition definition = WorkflowDefinition.builder("x")
+                .step("reserve", NOOP).compensateWith(undo)
+                .step("notify", NOOP)
+                .build();
+
+        assertSame(undo, definition.step(0).compensation());
+        assertFalse(definition.step(1).hasCompensation());
+    }
+
+    @Test
+    void compensationNeedsAStepAndOnlyOnePerStep() {
+        assertThrows(IllegalStateException.class,
+                () -> WorkflowDefinition.builder("x").compensateWith(NOOP));
+        assertThrows(IllegalStateException.class,
+                () -> WorkflowDefinition.builder("x").step("a", NOOP).compensateWith(NOOP).compensateWith(NOOP));
+    }
+
+    @Test
     void contextGivesOutputOfEarlierStep() {
         StepContext ctx = new StepContext(null, Map.of(),
                 Map.of("reserve-stock", Map.of("reservationId", "r-1")), 1);

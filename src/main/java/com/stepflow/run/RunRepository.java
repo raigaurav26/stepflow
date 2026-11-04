@@ -1,6 +1,7 @@
 package com.stepflow.run;
 
 import com.stepflow.domain.RunStatus;
+import com.stepflow.domain.StepKind;
 import com.stepflow.domain.StepStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -39,10 +40,14 @@ public class RunRepository {
     }
 
     public void insertStep(UUID runId, int stepIndex, String stepName, int maxAttempts) {
+        insertStep(runId, stepIndex, stepName, StepKind.ACTION, maxAttempts);
+    }
+
+    public void insertStep(UUID runId, int stepIndex, String stepName, StepKind kind, int maxAttempts) {
         jdbc.update("""
-                INSERT INTO step_executions (run_id, step_index, step_name, status, max_attempts)
-                VALUES (?, ?, ?, ?, ?)
-                """, runId, stepIndex, stepName, StepStatus.PENDING.name(), maxAttempts);
+                INSERT INTO step_executions (run_id, step_index, step_name, kind, status, max_attempts)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, runId, stepIndex, stepName, kind.name(), StepStatus.PENDING.name(), maxAttempts);
     }
 
     public Optional<WorkflowRun> findRun(UUID id) {
@@ -55,7 +60,7 @@ public class RunRepository {
     }
 
     public List<StepExecution> findSteps(UUID runId) {
-        return jdbc.query("SELECT * FROM step_executions WHERE run_id = ? ORDER BY step_index",
+        return jdbc.query("SELECT * FROM step_executions WHERE run_id = ? ORDER BY id",
                 stepMapper, runId);
     }
 
@@ -83,6 +88,7 @@ public class RunRepository {
                 rs.getObject("run_id", UUID.class),
                 rs.getInt("step_index"),
                 rs.getString("step_name"),
+                StepKind.valueOf(rs.getString("kind")),
                 StepStatus.valueOf(rs.getString("status")),
                 rs.getInt("attempt"),
                 rs.getInt("max_attempts"),

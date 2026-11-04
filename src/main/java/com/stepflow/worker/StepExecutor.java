@@ -4,10 +4,12 @@ import com.stepflow.definition.NonRetryableException;
 import com.stepflow.definition.RetryPolicy;
 import com.stepflow.definition.StepContext;
 import com.stepflow.definition.StepDefinition;
+import com.stepflow.definition.StepHandler;
 import com.stepflow.definition.UnknownWorkflowException;
 import com.stepflow.definition.WorkflowDefinition;
 import com.stepflow.definition.WorkflowRegistry;
 import com.stepflow.domain.RunStatus;
+import com.stepflow.domain.StepKind;
 import com.stepflow.run.RunService;
 import com.stepflow.run.StepExecution;
 import com.stepflow.run.StepQueue;
@@ -19,6 +21,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.OptionalInt;
+import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** Runs one leased step and records what happened. */
@@ -49,26 +53,33 @@ public class StepExecutor {
         try {
             workflow = registry.get(run.workflowType());
         } catch (UnknownWorkflowException e) {
-            // the code for this workflow is gone (renamed or removed), so retrying can't help
-            giveUp(step, workerId, e.getMessage());
+            // the code for this workflow is gone (renamed or removed), so retrying or undoing can't happen
+            failRun(step, workerId, e.getMessage(), e.getMessage());
             return;
         }
         queue.markRunRunning(run.id());
 
         StepDefinition definition = workflow.step(step.stepIndex());
+        boolean compensating = step.kind() == StepKind.COMPENSATION;
+        StepHandler handler = compensating ? definition.compensation() : definition.handler();
         StepContext context = new StepContext(run.id(), run.input(), queue.succeededOutputs(run.id()), step.attempt());
 
         Map<String, Object> output;
         try {
-            output = definition.handler().execute(context);
+            output = handler.execute(context);
         } catch (NonRetryableException e) {
-            giveUp(step, workerId, describe(e));
+            outOfAttempts(workflow, run, step, workerId, describe(e));
             return;
         } catch (Exception e) {
-            onFailure(definition, step, workerId, describe(e));
+            onFailure(workflow, run, definition, step, workerId, describe(e));
             return;
         }
-        onSuccess(workflow, step, workerId, output == null ? Map.of() : output);
+        output = output == null ? Map.of() : output;
+        if (compensating) {
+            onCompensated(workflow, run, step, workerId, output);
+        } else {
+            onSuccess(workflow, step, workerId, output);
+        }
     }
 
     private void onSuccess(WorkflowDefinition workflow, StepExecution step, String workerId,
@@ -88,27 +99,85 @@ public class StepExecutor {
         });
     }
 
-    private void onFailure(StepDefinition definition, StepExecution step, String workerId, String error) {
+    private void onFailure(WorkflowDefinition workflow, WorkflowRun run, StepDefinition definition,
+                           StepExecution step, String workerId, String error) {
         if (step.attempt() < step.maxAttempts()) {
             Duration delay = definition.retryPolicyOr(defaultRetryPolicy)
                     .delayAfter(step.attempt(), ThreadLocalRandom.current());
-            log.info("Step {} of run {} failed on attempt {}/{}, retrying in {} ms: {}",
+            log.info("{} {} of run {} failed on attempt {}/{}, retrying in {} ms: {}", label(step),
                     step.stepName(), step.runId(), step.attempt(), step.maxAttempts(), delay.toMillis(), error);
             queue.scheduleRetry(step.id(), workerId, error, delay);
         } else {
-            giveUp(step, workerId, error);
+            outOfAttempts(workflow, run, step, workerId, error);
         }
     }
 
-    private void giveUp(StepExecution step, String workerId, String error) {
-        log.warn("Step {} of run {} is dead after {} attempt(s): {}",
+    private void outOfAttempts(WorkflowDefinition workflow, WorkflowRun run, StepExecution step,
+                               String workerId, String error) {
+        log.warn("{} {} of run {} is dead after {} attempt(s): {}", label(step),
                 step.stepName(), step.runId(), step.attempt(), error);
+        if (step.kind() == StepKind.COMPENSATION) {
+            // an undo that keeps failing needs a human: stop and leave the evidence on the run
+            failRun(step, workerId, error, "Compensation of step '" + step.stepName() + "' failed: " + error
+                    + " (run was rolling back after: " + run.error() + ")");
+            return;
+        }
+        String runError = "Step '" + step.stepName() + "' failed: " + error;
         tx.executeWithoutResult(status -> {
-            if (queue.markDead(step.id(), workerId, error)) {
-                queue.finishRun(step.runId(), RunStatus.FAILED, null,
-                        "Step '" + step.stepName() + "' failed: " + error);
+            if (!queue.markDead(step.id(), workerId, error)) {
+                return;
+            }
+            OptionalInt toUndo = nextToCompensate(workflow, step.runId(), step.stepIndex());
+            if (toUndo.isEmpty()) {
+                queue.finishRun(step.runId(), RunStatus.FAILED, null, runError);
+                return;
+            }
+            log.info("Rolling back run {} after {} failed", step.runId(), step.stepName());
+            queue.markRunCompensating(step.runId(), runError);
+            enqueueCompensation(workflow, step.runId(), toUndo.getAsInt());
+        });
+    }
+
+    private void onCompensated(WorkflowDefinition workflow, WorkflowRun run, StepExecution step, String workerId,
+                               Map<String, Object> output) {
+        tx.executeWithoutResult(status -> {
+            if (!queue.markSucceeded(step.id(), workerId, output)) {
+                log.warn("Lost the lease on compensation {} of run {}", step.stepName(), step.runId());
+                return;
+            }
+            queue.markCompensated(step.runId(), step.stepIndex());
+            OptionalInt toUndo = nextToCompensate(workflow, step.runId(), step.stepIndex());
+            if (toUndo.isPresent()) {
+                enqueueCompensation(workflow, step.runId(), toUndo.getAsInt());
+            } else {
+                queue.finishRun(step.runId(), RunStatus.COMPENSATED, null, run.error());
             }
         });
+    }
+
+    /** The highest succeeded step below {@code index} that has something to undo. */
+    private OptionalInt nextToCompensate(WorkflowDefinition workflow, UUID runId, int index) {
+        return queue.succeededStepsBelow(runId, index).stream()
+                .mapToInt(Integer::intValue)
+                .filter(i -> workflow.step(i).hasCompensation())
+                .findFirst();
+    }
+
+    private void enqueueCompensation(WorkflowDefinition workflow, UUID runId, int index) {
+        StepDefinition step = workflow.step(index);
+        queue.enqueueCompensation(runId, index, step.name(), step.maxAttempts());
+    }
+
+    private void failRun(StepExecution step, String workerId, String stepError, String runError) {
+        tx.executeWithoutResult(status -> {
+            if (queue.markDead(step.id(), workerId, stepError)) {
+                queue.finishRun(step.runId(), RunStatus.FAILED, null, runError);
+            }
+        });
+    }
+
+    private static String label(StepExecution step) {
+        return step.kind() == StepKind.COMPENSATION ? "Compensation of step" : "Step";
     }
 
     private static String describe(Exception e) {

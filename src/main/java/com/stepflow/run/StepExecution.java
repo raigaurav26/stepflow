@@ -1,5 +1,6 @@
 package com.stepflow.run;
 
+import com.stepflow.domain.StepKind;
 import com.stepflow.domain.StepStatus;
 
 import java.time.Instant;
@@ -10,6 +11,7 @@ public record StepExecution(long id,
                             UUID runId,
                             int stepIndex,
                             String stepName,
+                            StepKind kind,
                             StepStatus status,
                             int attempt,
                             int maxAttempts,
