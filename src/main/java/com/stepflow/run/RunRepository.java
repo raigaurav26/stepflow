@@ -32,11 +32,24 @@ public class RunRepository {
         this.stepMapper = this::mapStep;
     }
 
-    public void insertRun(UUID id, String workflowType, Map<String, Object> input, String idempotencyKey) {
-        jdbc.update("""
+    /**
+     * Inserts the run unless another run already holds the same idempotency key.
+     *
+     * @return true if this call created the run
+     */
+    public boolean insertRun(UUID id, String workflowType, Map<String, Object> input, String idempotencyKey) {
+        // ON CONFLICT instead of check-then-insert: two requests racing with the same key
+        // can't both pass a check, and a unique violation would abort the transaction
+        return jdbc.update("""
                 INSERT INTO workflow_runs (id, workflow_type, status, input, idempotency_key)
                 VALUES (?, ?, ?, ?::jsonb, ?)
-                """, id, workflowType, RunStatus.PENDING.name(), json.write(input), idempotencyKey);
+                ON CONFLICT (idempotency_key) DO NOTHING
+                """, id, workflowType, RunStatus.PENDING.name(), json.write(input), idempotencyKey) == 1;
+    }
+
+    public Optional<WorkflowRun> findRunByIdempotencyKey(String idempotencyKey) {
+        return jdbc.query("SELECT * FROM workflow_runs WHERE idempotency_key = ?", runMapper, idempotencyKey)
+                .stream().findFirst();
     }
 
     public void insertStep(UUID runId, int stepIndex, String stepName, int maxAttempts) {

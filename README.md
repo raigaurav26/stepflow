@@ -88,7 +88,26 @@ If `charge-card` fails for good, the run moves to `COMPENSATING` and the hotel i
 | GET | `/api/runs/{id}` | A run with all of its steps |
 | GET | `/api/runs?limit=20` | Most recent runs |
 
-Starting a run creates it as `PENDING` and queues only its first step. Each later step is queued when the one before it succeeds, so the step table only ever holds work that can run now. Errors use RFC 7807 problem details (`404` unknown run, `422` unknown workflow type, `400` invalid body).
+### Idempotent starts
+
+A client that times out on `POST /api/runs` can't tell whether the run started. Sending the request again could pay someone twice. With an `Idempotency-Key` header, it's safe to resend:
+
+```bash
+curl -X POST localhost:8080/api/runs \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: payout-77' \
+  -d '{"workflowType": "payout", "input": {"amount": 1500}}'
+```
+
+| Request | Response |
+|---|---|
+| First request with a key | `201 Created`, new run |
+| Same key, same workflow and input | `200 OK`, the original run, `Idempotent-Replayed: true` |
+| Same key, different workflow or input | `409 Conflict` with `existingRunId` |
+| No key | `201 Created`, always a new run |
+
+The insert uses `ON CONFLICT (idempotency_key) DO NOTHING` on a unique column rather than check-then-insert, so requests racing with the same key can't both create a run. A test sends 12 at once and gets exactly one run and one queued step.
+
+Starting a run creates it as `PENDING` and queues only its first step. Each later step is queued when the one before it succeeds, so the step table only ever holds work that can run now. Errors use RFC 7807 problem details (`404` unknown run, `422` unknown workflow type, `409` idempotency key reused, `400` invalid body).
 
 ## Workers
 
@@ -155,7 +174,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Worker pool that claims steps with `SELECT ... FOR UPDATE SKIP LOCKED`
 - [x] Retries with exponential backoff and jitter, dead steps
 - [x] Saga compensation in reverse order
-- [ ] Idempotent run start (`Idempotency-Key` header)
+- [x] Idempotent run start (`Idempotency-Key` header)
 - [ ] Durable timers (`sleep` steps) and scheduled runs
 - [ ] Lease expiry recovery when a worker crashes mid-step
 - [ ] Chaos tests: kill workers mid-run and check nothing is lost or run twice

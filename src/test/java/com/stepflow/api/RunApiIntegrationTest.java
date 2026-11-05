@@ -102,4 +102,68 @@ class RunApiIntegrationTest {
         mvc.perform(get("/api/runs/{id}", UUID.randomUUID()))
                 .andExpect(status().isNotFound());
     }
+
+    private static String startBody(String orderId) {
+        return "{\"workflowType\": \"order-fulfilment\", \"input\": {\"orderId\": \"" + orderId + "\", \"amount\": 499}}";
+    }
+
+    @Test
+    void repeatingARequestWithTheSameKeyReturnsTheOriginalRun() throws Exception {
+        String key = "checkout-" + UUID.randomUUID();
+        MvcResult first = mvc.perform(post("/api/runs")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(startBody("A-200")))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String id = JsonPath.read(first.getResponse().getContentAsString(), "$.id");
+
+        mvc.perform(post("/api/runs")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(startBody("A-200")))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Idempotent-Replayed", "true"))
+                .andExpect(header().string("Location", "http://localhost/api/runs/" + id))
+                .andExpect(jsonPath("$.id").value(id))
+                .andExpect(jsonPath("$.steps.length()").value(1));
+    }
+
+    @Test
+    void reusingAKeyForADifferentRequestIsAConflict() throws Exception {
+        String key = "checkout-" + UUID.randomUUID();
+        MvcResult first = mvc.perform(post("/api/runs")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(startBody("A-300")))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String id = JsonPath.read(first.getResponse().getContentAsString(), "$.id");
+
+        mvc.perform(post("/api/runs")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(startBody("A-301")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.existingRunId").value(id));
+    }
+
+    @Test
+    void requestsWithoutAKeyAlwaysStartNewRuns() throws Exception {
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(post("/api/runs")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(startBody("A-400")))
+                    .andExpect(status().isCreated());
+        }
+    }
+
+    @Test
+    void overlongKeyIsABadRequest() throws Exception {
+        mvc.perform(post("/api/runs")
+                        .header("Idempotency-Key", "k".repeat(201))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(startBody("A-500")))
+                .andExpect(status().isBadRequest());
+    }
 }

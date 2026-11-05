@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -35,12 +36,24 @@ public class RunController {
         return registry.all().stream().map(WorkflowSummary::of).toList();
     }
 
+    /**
+     * Starts a run. With an {@code Idempotency-Key} header, repeating the same request returns
+     * the original run with {@code 200} and {@code Idempotent-Replayed: true} instead of
+     * starting another one.
+     */
     @PostMapping("/runs")
-    public ResponseEntity<RunResponse> start(@Valid @RequestBody StartRunRequest request) {
-        WorkflowRun run = runService.start(request.workflowType(), request.input());
-        URI location = ServletUriComponentsBuilder.fromCurrentRequest()
-                .path("/{id}").buildAndExpand(run.id()).toUri();
-        return ResponseEntity.created(location).body(RunResponse.of(run, runService.steps(run.id())));
+    public ResponseEntity<RunResponse> start(@Valid @RequestBody StartRunRequest request,
+                                             @RequestHeader(name = "Idempotency-Key", required = false)
+                                             String idempotencyKey) {
+        RunService.StartResult result = runService.start(request.workflowType(), request.input(), idempotencyKey);
+        WorkflowRun run = result.run();
+        RunResponse body = RunResponse.of(run, runService.steps(run.id()));
+        URI location = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/api/runs/{id}").buildAndExpand(run.id()).toUri();
+        if (!result.created()) {
+            return ResponseEntity.ok().location(location).header("Idempotent-Replayed", "true").body(body);
+        }
+        return ResponseEntity.created(location).body(body);
     }
 
     @GetMapping("/runs/{id}")
