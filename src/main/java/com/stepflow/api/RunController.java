@@ -45,7 +45,8 @@ public class RunController {
     public ResponseEntity<RunResponse> start(@Valid @RequestBody StartRunRequest request,
                                              @RequestHeader(name = "Idempotency-Key", required = false)
                                              String idempotencyKey) {
-        RunService.StartResult result = runService.start(request.workflowType(), request.input(), idempotencyKey);
+        RunService.StartResult result = runService.start(request.workflowType(), request.input(),
+                idempotencyKey, request.startAt());
         WorkflowRun run = result.run();
         RunResponse body = RunResponse.of(run, runService.steps(run.id()));
         URI location = ServletUriComponentsBuilder.fromCurrentContextPath()

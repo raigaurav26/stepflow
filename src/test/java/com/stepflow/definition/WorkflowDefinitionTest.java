@@ -76,6 +76,19 @@ class WorkflowDefinitionTest {
     }
 
     @Test
+    void sleepAddsADelayedStep() {
+        WorkflowDefinition definition = WorkflowDefinition.builder("x")
+                .step("a", NOOP)
+                .sleep("wait", java.time.Duration.ofDays(3))
+                .build();
+
+        assertEquals(java.time.Duration.ofDays(3), definition.step(1).delay());
+        assertEquals(java.time.Duration.ZERO, definition.step(0).delayOrZero());
+        assertThrows(IllegalArgumentException.class,
+                () -> WorkflowDefinition.builder("y").sleep("wait", java.time.Duration.ZERO));
+    }
+
+    @Test
     void contextGivesOutputOfEarlierStep() {
         StepContext ctx = new StepContext(null, Map.of(),
                 Map.of("reserve-stock", Map.of("reservationId", "r-1")), 1);

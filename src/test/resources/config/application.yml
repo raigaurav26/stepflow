@@ -2,3 +2,5 @@
 stepflow:
   worker:
     enabled: false
+  scheduler:
+    enabled: false

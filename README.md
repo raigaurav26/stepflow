@@ -79,6 +79,33 @@ If `charge-card` fails for good, the run moves to `COMPENSATING` and the hotel i
 - Each compensation is queued in the same transaction that records the previous one, so a crash mid-rollback picks up where it stopped.
 - If a compensation runs out of attempts, the rollback stops and the run is `FAILED` with both errors. Undoing further could make things worse, so the remaining steps are left for a person to check.
 
+## Timers and schedules
+
+**Sleep steps.** `.sleep("cooling-off-period", Duration.ofHours(48))` makes the run wait before the next step. No thread sleeps: the step is queued with `next_run_at` in the future and simply isn't claimable until then, so a two-day wait survives deploys and restarts.
+
+**Delayed start.** `POST /api/runs` takes an optional `startAt` (ISO-8601). The run exists as `PENDING` straight away, and its first step becomes claimable at that time. A time in the past means now.
+
+**Cron schedules.** Start a workflow on a schedule, in a time zone:
+
+```bash
+curl -X POST localhost:8080/api/schedules -H 'Content-Type: application/json' -d '{
+  "name": "weekday-report", "workflowType": "daily-report",
+  "cron": "0 0 9 * * MON-FRI", "zone": "Asia/Kolkata", "input": {"format": "pdf"}
+}'
+```
+
+- Every instance runs the scheduler. Due schedules are locked with `FOR UPDATE SKIP LOCKED`, so each slot fires once however many instances there are (a test runs 6 at once).
+- Each fired run gets the idempotency key `schedule:<id>:<slot>`, so a slot can never start two runs.
+- After downtime, a schedule fires once for the slot it missed, then jumps ahead. It doesn't replay every missed slot.
+- Paused schedules skip the slots they missed when resumed. A schedule whose workflow no longer exists is disabled instead of failing every tick.
+
+| Method | Path | |
+|---|---|---|
+| POST | `/api/schedules` | Create (`409` if the name is taken, `400` bad cron or zone) |
+| GET | `/api/schedules`, `/api/schedules/{id}` | List or read |
+| POST | `/api/schedules/{id}/pause`, `/resume` | Pause or resume |
+| DELETE | `/api/schedules/{id}` | Delete |
+
 ## API
 
 | Method | Path | What it does |
@@ -150,6 +177,8 @@ Throw `NonRetryableException` when trying again can't help (a declined card, inv
 | `stepflow.worker.threads` | `4` | Steps run at the same time per instance |
 | `stepflow.worker.poll-interval` | `500ms` | Wait between polls when the queue is empty |
 | `stepflow.worker.lease-duration` | `30s` | How long a claimed step belongs to one worker |
+| `stepflow.scheduler.enabled` | `true` | Fire due cron schedules from this instance |
+| `stepflow.scheduler.poll-interval` | `1s` | How often to check for due schedules |
 | `stepflow.retry.initial-delay` | `1s` | Wait before the first retry |
 | `stepflow.retry.multiplier` | `2.0` | Growth of the wait after each failure |
 | `stepflow.retry.max-delay` | `5m` | Longest wait between attempts |
@@ -175,7 +204,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Retries with exponential backoff and jitter, dead steps
 - [x] Saga compensation in reverse order
 - [x] Idempotent run start (`Idempotency-Key` header)
-- [ ] Durable timers (`sleep` steps) and scheduled runs
+- [x] Durable timers (`sleep` steps), delayed starts and cron schedules
 - [ ] Lease expiry recovery when a worker crashes mid-step
 - [ ] Chaos tests: kill workers mid-run and check nothing is lost or run twice
 - [ ] Metrics with Micrometer and Prometheus

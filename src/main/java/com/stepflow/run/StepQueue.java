@@ -123,8 +123,8 @@ public class StepQueue {
                 """, status.name(), json.write(output), error, runId);
     }
 
-    public void enqueue(UUID runId, int stepIndex, String stepName, int maxAttempts) {
-        runs.insertStep(runId, stepIndex, stepName, StepKind.ACTION, maxAttempts);
+    public void enqueue(UUID runId, int stepIndex, String stepName, int maxAttempts, Duration delay) {
+        runs.insertStep(runId, stepIndex, stepName, StepKind.ACTION, maxAttempts, null, delay);
     }
 
     public void enqueueCompensation(UUID runId, int stepIndex, String stepName, int maxAttempts) {

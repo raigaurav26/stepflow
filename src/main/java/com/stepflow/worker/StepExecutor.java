@@ -92,7 +92,7 @@ public class StepExecutor {
             int next = step.stepIndex() + 1;
             if (next < workflow.steps().size()) {
                 StepDefinition nextStep = workflow.step(next);
-                queue.enqueue(step.runId(), next, nextStep.name(), nextStep.maxAttempts());
+                queue.enqueue(step.runId(), next, nextStep.name(), nextStep.maxAttempts(), nextStep.delayOrZero());
             } else {
                 queue.finishRun(step.runId(), RunStatus.COMPLETED, output, null);
             }

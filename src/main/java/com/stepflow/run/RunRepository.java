@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -57,10 +58,22 @@ public class RunRepository {
     }
 
     public void insertStep(UUID runId, int stepIndex, String stepName, StepKind kind, int maxAttempts) {
+        insertStep(runId, stepIndex, stepName, kind, maxAttempts, null, Duration.ZERO);
+    }
+
+    /**
+     * @param notBefore earliest time the step may run, or null for now (past times count as now)
+     * @param delay     added on top of {@code notBefore}
+     */
+    public void insertStep(UUID runId, int stepIndex, String stepName, StepKind kind, int maxAttempts,
+                           Instant notBefore, Duration delay) {
+        // times are worked out in the database so every instance agrees on "now"
         jdbc.update("""
-                INSERT INTO step_executions (run_id, step_index, step_name, kind, status, max_attempts)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, runId, stepIndex, stepName, kind.name(), StepStatus.PENDING.name(), maxAttempts);
+                INSERT INTO step_executions (run_id, step_index, step_name, kind, status, max_attempts, next_run_at)
+                VALUES (?, ?, ?, ?, ?, ?,
+                        GREATEST(COALESCE(?::timestamptz, now()), now()) + make_interval(secs => ?))
+                """, runId, stepIndex, stepName, kind.name(), StepStatus.PENDING.name(), maxAttempts,
+                notBefore == null ? null : Timestamp.from(notBefore), delay.toMillis() / 1000.0);
     }
 
     public Optional<WorkflowRun> findRun(UUID id) {

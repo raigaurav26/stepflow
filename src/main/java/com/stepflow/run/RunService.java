@@ -3,9 +3,11 @@ package com.stepflow.run;
 import com.stepflow.definition.StepDefinition;
 import com.stepflow.definition.WorkflowDefinition;
 import com.stepflow.definition.WorkflowRegistry;
+import com.stepflow.domain.StepKind;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -46,6 +48,16 @@ public class RunService {
      */
     @Transactional
     public StartResult start(String workflowType, Map<String, Object> input, String idempotencyKey) {
+        return start(workflowType, input, idempotencyKey, null);
+    }
+
+    /**
+     * @param startAt when the first step may run, or null for now. The run exists (and shows
+     *                as PENDING) straight away, so it can be inspected or cancelled before then.
+     */
+    @Transactional
+    public StartResult start(String workflowType, Map<String, Object> input, String idempotencyKey,
+                             Instant startAt) {
         WorkflowDefinition definition = registry.get(workflowType);
         Map<String, Object> safeInput = input == null ? Map.of() : input;
         if (idempotencyKey != null) {
@@ -63,7 +75,7 @@ public class RunService {
         }
 
         StepDefinition first = definition.step(0);
-        runs.insertStep(runId, 0, first.name(), first.maxAttempts());
+        runs.insertStep(runId, 0, first.name(), StepKind.ACTION, first.maxAttempts(), startAt, first.delayOrZero());
         return new StartResult(get(runId), true);
     }
 

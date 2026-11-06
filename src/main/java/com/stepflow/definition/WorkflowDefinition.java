@@ -1,8 +1,10 @@
 package com.stepflow.definition;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -76,7 +78,21 @@ public final class WorkflowDefinition {
         }
 
         public Builder step(String name, int maxAttempts, RetryPolicy retryPolicy, StepHandler handler) {
-            steps.add(new StepDefinition(name, maxAttempts, retryPolicy, handler, null));
+            steps.add(new StepDefinition(name, maxAttempts, retryPolicy, handler, null, null));
+            return this;
+        }
+
+        /**
+         * A durable timer: the run waits {@code duration} before the next step. Nothing sleeps
+         * while it waits; the step simply isn't claimable until its time comes, so the wait
+         * survives restarts and can last days (a cooling-off period, a reminder email).
+         */
+        public Builder sleep(String name, Duration duration) {
+            if (duration == null || duration.isNegative() || duration.isZero()) {
+                throw new IllegalArgumentException("sleep needs a positive duration");
+            }
+            steps.add(new StepDefinition(name, 1, null, ctx -> Map.of("sleptSeconds", duration.toSeconds()),
+                    null, duration));
             return this;
         }
 

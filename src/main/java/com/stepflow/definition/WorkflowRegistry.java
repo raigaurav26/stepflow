@@ -37,6 +37,10 @@ public class WorkflowRegistry {
         return definition;
     }
 
+    public boolean contains(String type) {
+        return byType.containsKey(type);
+    }
+
     public Collection<WorkflowDefinition> all() {
         return Collections.unmodifiableCollection(byType.values());
     }
