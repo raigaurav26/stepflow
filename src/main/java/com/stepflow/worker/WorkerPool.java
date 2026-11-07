@@ -4,7 +4,9 @@ import com.stepflow.run.StepExecution;
 import com.stepflow.run.StepQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import jakarta.annotation.PreDestroy;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
 
 import java.net.InetAddress;
@@ -12,6 +14,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -31,6 +35,11 @@ public class WorkerPool implements SmartLifecycle {
     private final WorkerProperties props;
     private final String workerId;
     private final Semaphore freeSlots;
+    private final ScheduledExecutorService heartbeats = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "stepflow-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
 
     private volatile boolean running;
     private ExecutorService steps;
@@ -99,12 +108,33 @@ public class WorkerPool implements SmartLifecycle {
     }
 
     private void runSafely(StepExecution step) {
+        ScheduledFuture<?> heartbeat = heartbeats.scheduleAtFixedRate(() -> renew(step),
+                props.heartbeatInterval().toMillis(), props.heartbeatInterval().toMillis(), TimeUnit.MILLISECONDS);
         try {
             executor.execute(step, workerId);
         } catch (RuntimeException e) {
             // the lease will expire and the step becomes claimable again
             log.error("Could not record the result of step {} of run {}", step.stepName(), step.runId(), e);
+        } finally {
+            heartbeat.cancel(false);
         }
+    }
+
+    private void renew(StepExecution step) {
+        try {
+            if (!queue.renewLease(step.id(), workerId, props.leaseDuration())) {
+                log.warn("Lease on step {} of run {} is gone; its result will be dropped",
+                        step.stepName(), step.runId());
+                throw new IllegalStateException("lease lost"); // stops this heartbeat
+            }
+        } catch (DataAccessException e) {
+            log.warn("Could not renew lease on step {} of run {}", step.stepName(), step.runId(), e);
+        }
+    }
+
+    @PreDestroy
+    void shutdownHeartbeats() {
+        heartbeats.shutdownNow();
     }
 
     private void sleepQuietly() {

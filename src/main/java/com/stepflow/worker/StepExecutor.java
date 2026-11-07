@@ -59,6 +59,13 @@ public class StepExecutor {
         }
         queue.markRunRunning(run.id());
 
+        if (step.attempt() > step.maxAttempts()) {
+            // the last allowed attempt was lost with a crashed worker; don't run it again
+            outOfAttempts(workflow, run, step, workerId, step.lastError() == null
+                    ? "Out of attempts" : step.lastError());
+            return;
+        }
+
         StepDefinition definition = workflow.step(step.stepIndex());
         boolean compensating = step.kind() == StepKind.COMPENSATION;
         StepHandler handler = compensating ? definition.compensation() : definition.handler();

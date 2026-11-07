@@ -105,6 +105,44 @@ public class StepQueue {
                 """, error, stepId, workerId) == 1;
     }
 
+    /**
+     * Extends the lease of a step that is still running, so a slow step isn't mistaken for a
+     * crashed one.
+     *
+     * @return false if the lease is gone (expired and taken, or the step finished)
+     */
+    public boolean renewLease(long stepId, String workerId, Duration lease) {
+        return jdbc.update("""
+                UPDATE step_executions
+                   SET lease_expires_at = now() + make_interval(secs => ?), updated_at = now()
+                 WHERE id = ? AND status = 'LEASED' AND lease_owner = ?
+                """, lease.toMillis() / 1000.0, stepId, workerId) == 1;
+    }
+
+    /**
+     * Puts steps whose lease ran out back in the queue. A lease only runs out when its worker
+     * stopped renewing it: the process crashed, was killed, or lost its database connection.
+     * The attempt that was in progress still counts, so a step that keeps crashing its worker
+     * eventually runs out of attempts instead of looping forever.
+     *
+     * @return the ids of the steps put back
+     */
+    public List<Long> reclaimExpiredLeases(int limit) {
+        return jdbc.queryForList("""
+                UPDATE step_executions s
+                   SET status = 'PENDING',
+                       last_error = 'Lease held by ' || s.lease_owner || ' expired on attempt ' || s.attempt,
+                       lease_owner = NULL, lease_expires_at = NULL, next_run_at = now(), updated_at = now()
+                 WHERE s.id IN (
+                       SELECT id FROM step_executions
+                        WHERE status = 'LEASED' AND lease_expires_at < now()
+                        ORDER BY lease_expires_at
+                        LIMIT ?
+                          FOR UPDATE SKIP LOCKED)
+                RETURNING s.id
+                """, Long.class, limit);
+    }
+
     public void markRunRunning(UUID runId) {
         jdbc.update("""
                 UPDATE workflow_runs SET status = 'RUNNING', updated_at = now()

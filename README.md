@@ -155,6 +155,17 @@ RETURNING *;
 - When a step succeeds, the next step is queued in the same transaction. After the last step, the run is `COMPLETED` with that step's output.
 - A failing step is retried until it runs out of attempts. Then it is `DEAD` and the run is `FAILED` with the error.
 
+## Crash recovery
+
+A claimed step is leased, not owned. If the worker holding it dies (crash, `kill -9`, lost database connection), the lease runs out and the step goes back in the queue:
+
+- **Heartbeats.** While a step runs, its worker renews the lease every third of `lease-duration`. A slow step keeps its lease. Only a worker that has stopped renewing loses one. A test runs a 2.5s step with a 0.9s lease while reclaiming constantly, and the step runs exactly once.
+- **Reaper.** Every instance checks for expired leases every `reap-interval` (`FOR UPDATE SKIP LOCKED`, so instances don't collide) and puts those steps back as `PENDING`, noting which worker lost them.
+- **Fencing.** If the "dead" worker was only paused and comes back, its result is ignored, because every write checks `lease_owner`.
+- **No poison loops.** The lost attempt still counts. A step that crashes its worker on every attempt runs out of attempts and fails (and rolls back) like any other failure, instead of crashing workers forever.
+
+Because a step can run again after a crash, step handlers should be idempotent: use the run id as an idempotency key when calling other systems.
+
 ## Retries
 
 A failed step goes to `RETRY_SCHEDULED` with `next_run_at` set in the future, so the wait survives restarts and no thread sleeps through it. The wait grows exponentially, is capped, and has jitter so that many steps failing together (a partner API going down) don't all retry in the same instant:
@@ -176,7 +187,8 @@ Throw `NonRetryableException` when trying again can't help (a declined card, inv
 | `stepflow.worker.enabled` | `true` | Turn the pool off for API-only instances |
 | `stepflow.worker.threads` | `4` | Steps run at the same time per instance |
 | `stepflow.worker.poll-interval` | `500ms` | Wait between polls when the queue is empty |
-| `stepflow.worker.lease-duration` | `30s` | How long a claimed step belongs to one worker |
+| `stepflow.worker.lease-duration` | `30s` | How long a claimed step belongs to one worker without a heartbeat |
+| `stepflow.worker.reap-interval` | `10s` | How often to reclaim steps from crashed workers |
 | `stepflow.scheduler.enabled` | `true` | Fire due cron schedules from this instance |
 | `stepflow.scheduler.poll-interval` | `1s` | How often to check for due schedules |
 | `stepflow.retry.initial-delay` | `1s` | Wait before the first retry |
@@ -205,7 +217,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Saga compensation in reverse order
 - [x] Idempotent run start (`Idempotency-Key` header)
 - [x] Durable timers (`sleep` steps), delayed starts and cron schedules
-- [ ] Lease expiry recovery when a worker crashes mid-step
+- [x] Lease expiry recovery when a worker crashes mid-step, with lease heartbeats
 - [ ] Chaos tests: kill workers mid-run and check nothing is lost or run twice
 - [ ] Metrics with Micrometer and Prometheus
 - [ ] Web dashboard of runs and steps

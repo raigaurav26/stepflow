@@ -19,7 +19,9 @@ public class SchedulerLoop {
         this.scheduleService = scheduleService;
     }
 
-    @Scheduled(fixedDelayString = "${stepflow.scheduler.poll-interval:1s}")
+    // DurationStyle accepts the same "1s" style as the rest of the config; plain @Scheduled only takes ms or ISO
+    @Scheduled(fixedDelayString = "#{T(org.springframework.boot.convert.DurationStyle)"
+            + ".detectAndParse('${stepflow.scheduler.poll-interval:1s}').toMillis()}")
     public void tick() {
         try {
             while (scheduleService.fireDue(50) == 50) {

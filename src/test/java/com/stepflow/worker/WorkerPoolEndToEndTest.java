@@ -21,9 +21,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Starts the real background pool and checks every step of every run executes exactly once. */
+/**
+ * Starts the real background pool (and the lease reaper and scheduler, as in production) and
+ * checks every step of every run executes exactly once.
+ */
 @SpringBootTest(properties = {
         "stepflow.worker.enabled=true",
+        "stepflow.scheduler.enabled=true",
         "stepflow.worker.threads=6",
         "stepflow.worker.poll-interval=50ms"
 })
