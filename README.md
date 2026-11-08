@@ -166,6 +166,15 @@ A claimed step is leased, not owned. If the worker holding it dies (crash, `kill
 
 Because a step can run again after a crash, step handlers should be idempotent: use the run id as an idempotency key when calling other systems.
 
+## Chaos tests
+
+`ChaosIntegrationTest` runs the real worker pool, lease heartbeats and reaper with a 600ms lease, and makes workers die in the middle of steps. A crash is an `Error` thrown from the handler: the executor only catches `Exception`, so nothing is written back and the lease is left to expire, as with a killed process.
+
+- **Random deaths:** 40 three-step runs where about 30% of early attempts crash. All 40 runs complete, every step has exactly one recorded result, no lease is left behind, and every step's work happened at least once.
+- **Everyone dies for a while:** all workers crash for 2 seconds. Nothing finishes meanwhile; once the storm ends, all 20 runs complete.
+
+Delivery is at-least-once: a crash after the work but before the result is saved repeats the work. The tests check that repeats never exceed the number of crashes. Handlers should be idempotent (use the run id as the idempotency key when calling other systems).
+
 ## Retries
 
 A failed step goes to `RETRY_SCHEDULED` with `next_run_at` set in the future, so the wait survives restarts and no thread sleeps through it. The wait grows exponentially, is capped, and has jitter so that many steps failing together (a partner API going down) don't all retry in the same instant:
@@ -218,7 +227,7 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Idempotent run start (`Idempotency-Key` header)
 - [x] Durable timers (`sleep` steps), delayed starts and cron schedules
 - [x] Lease expiry recovery when a worker crashes mid-step, with lease heartbeats
-- [ ] Chaos tests: kill workers mid-run and check nothing is lost or run twice
+- [x] Chaos tests: kill workers mid-run and check nothing is lost or stuck
 - [ ] Metrics with Micrometer and Prometheus
 - [ ] Web dashboard of runs and steps
 - [ ] Demo workflow: order fulfilment
