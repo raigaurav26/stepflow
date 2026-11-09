@@ -1,5 +1,6 @@
 package com.stepflow.worker;
 
+import com.stepflow.metrics.StepMetrics;
 import com.stepflow.run.StepQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,9 +21,11 @@ public class LeaseReaper {
     private static final Logger log = LoggerFactory.getLogger(LeaseReaper.class);
 
     private final StepQueue queue;
+    private final StepMetrics metrics;
 
-    public LeaseReaper(StepQueue queue) {
+    public LeaseReaper(StepQueue queue, StepMetrics metrics) {
         this.queue = queue;
+        this.metrics = metrics;
     }
 
     // DurationStyle accepts the same "10s" style as the rest of the config; plain @Scheduled only takes ms or ISO
@@ -31,6 +34,7 @@ public class LeaseReaper {
     public void reap() {
         try {
             List<Long> reclaimed = queue.reclaimExpiredLeases(100);
+            metrics.leasesReclaimed(reclaimed.size());
             if (!reclaimed.isEmpty()) {
                 log.warn("Put {} step(s) with expired leases back in the queue: {}", reclaimed.size(), reclaimed);
             }

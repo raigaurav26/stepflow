@@ -4,6 +4,7 @@ import com.stepflow.definition.StepDefinition;
 import com.stepflow.definition.WorkflowDefinition;
 import com.stepflow.definition.WorkflowRegistry;
 import com.stepflow.domain.StepKind;
+import com.stepflow.metrics.StepMetrics;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,11 +22,13 @@ public class RunService {
     private final WorkflowRegistry registry;
     private final RunRepository runs;
     private final JsonCodec json;
+    private final StepMetrics metrics;
 
-    public RunService(WorkflowRegistry registry, RunRepository runs, JsonCodec json) {
+    public RunService(WorkflowRegistry registry, RunRepository runs, JsonCodec json, StepMetrics metrics) {
         this.registry = registry;
         this.runs = runs;
         this.json = json;
+        this.metrics = metrics;
     }
 
     /** The run a start request refers to, and whether this request created it. */
@@ -76,6 +79,7 @@ public class RunService {
 
         StepDefinition first = definition.step(0);
         runs.insertStep(runId, 0, first.name(), StepKind.ACTION, first.maxAttempts(), startAt, first.delayOrZero());
+        metrics.runStarted(definition.type());
         return new StartResult(get(runId), true);
     }
 

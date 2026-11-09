@@ -175,6 +175,41 @@ Because a step can run again after a crash, step handlers should be idempotent: 
 
 Delivery is at-least-once: a crash after the work but before the result is saved repeats the work. The tests check that repeats never exceed the number of crashes. Handlers should be idempotent (use the run id as the idempotency key when calling other systems).
 
+## Metrics
+
+`GET /actuator/prometheus` exposes Prometheus metrics (Micrometer). Tags are the workflow type and step name only, never ids, so the number of series stays small.
+
+| Metric | Type | What it tells you |
+|---|---|---|
+| `stepflow_step_duration_seconds{workflow,step,kind,outcome}` | timer + histogram | Handler runtime, and how many attempts succeeded or failed |
+| `stepflow_step_retries_total{workflow,step}` | counter | Failed attempts that were scheduled to retry |
+| `stepflow_step_dead_total{workflow,step,kind}` | counter | Steps that ran out of attempts |
+| `stepflow_runs_started_total{workflow}` | counter | Runs started |
+| `stepflow_runs_finished_total{workflow,status}` | counter | Runs that ended `COMPLETED`, `COMPENSATED` or `FAILED` |
+| `stepflow_leases_reclaimed_total` | counter | Steps taken back from crashed workers |
+| `stepflow_lease_lost_total{workflow,step}` | counter | Results dropped because the lease had been taken over |
+| `stepflow_queue_steps{state}` | gauge | Steps `runnable` (ready now), `waiting` (backoff, sleeps, delayed starts) or `leased` |
+| `stepflow_queue_oldest_runnable_seconds` | gauge | How long the longest-waiting runnable step has waited |
+| `stepflow_runs_active{status}` | gauge | Runs still `PENDING`, `RUNNING` or `COMPENSATING` |
+
+The queue gauges are read from the database (one cached query per second), so every instance reports the same system-wide numbers.
+
+Useful queries:
+
+```promql
+# add workers when steps are waiting for a free one
+stepflow_queue_oldest_runnable_seconds > 30
+
+# failing runs per minute, by workflow
+sum by (workflow) (rate(stepflow_runs_finished_total{status="FAILED"}[5m])) * 60
+
+# p95 step latency
+histogram_quantile(0.95, sum by (le, workflow, step) (rate(stepflow_step_duration_seconds_bucket[5m])))
+
+# workers are crashing
+rate(stepflow_leases_reclaimed_total[10m]) > 0
+```
+
 ## Retries
 
 A failed step goes to `RETRY_SCHEDULED` with `next_run_at` set in the future, so the wait survives restarts and no thread sleeps through it. The wait grows exponentially, is capped, and has jitter so that many steps failing together (a partner API going down) don't all retry in the same instant:
@@ -228,6 +263,6 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Durable timers (`sleep` steps), delayed starts and cron schedules
 - [x] Lease expiry recovery when a worker crashes mid-step, with lease heartbeats
 - [x] Chaos tests: kill workers mid-run and check nothing is lost or stuck
-- [ ] Metrics with Micrometer and Prometheus
+- [x] Metrics with Micrometer and Prometheus
 - [ ] Web dashboard of runs and steps
 - [ ] Demo workflow: order fulfilment

@@ -150,15 +150,16 @@ public class StepQueue {
                 """, runId);
     }
 
-    public void finishRun(UUID runId, RunStatus status, Map<String, Object> output, String error) {
+    /** @return true if this call finished the run (false if it had already finished) */
+    public boolean finishRun(UUID runId, RunStatus status, Map<String, Object> output, String error) {
         if (!status.isTerminal()) {
             throw new IllegalArgumentException(status + " is not a final status");
         }
-        jdbc.update("""
+        return jdbc.update("""
                 UPDATE workflow_runs
                    SET status = ?, output = ?::jsonb, error = ?, completed_at = now(), updated_at = now()
                  WHERE id = ? AND status IN ('PENDING', 'RUNNING', 'COMPENSATING')
-                """, status.name(), json.write(output), error, runId);
+                """, status.name(), json.write(output), error, runId) == 1;
     }
 
     public void enqueue(UUID runId, int stepIndex, String stepName, int maxAttempts, Duration delay) {
