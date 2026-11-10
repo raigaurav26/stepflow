@@ -1,4 +1,12 @@
 # Tests drive workers by hand unless a test turns the pool on.
+spring:
+  datasource:
+    hikari:
+      # every cached test context keeps its own pool; small pools stop the suite from running
+      # PostgreSQL out of connections (default limit 100) as the number of test contexts grows
+      maximum-pool-size: 6
+      minimum-idle: 1
+
 stepflow:
   worker:
     enabled: false

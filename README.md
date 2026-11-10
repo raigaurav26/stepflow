@@ -41,6 +41,18 @@ LEASED → PENDING   (lease expired: the worker crashed)
 
 Status transitions are enforced in code (`RunStatus`, `StepStatus`) and status values by `CHECK` constraints in the schema.
 
+## Dashboard
+
+Open `http://localhost:8080/` for a live view of the system (it refreshes every 2 seconds, no build step, no external scripts):
+
+![StepFlow dashboard](docs/dashboard.png)
+
+- Cards: runs in progress, steps ready, running and waiting, how long the oldest ready step has waited, and runs completed, rolled back and failed in the last hour.
+- Click a run to see its steps: status, attempt count, when a waiting step will run next, which worker holds a running step, and the last error. Rollbacks show as `undo <step>` rows.
+- Filter runs by status, or start a run from the form.
+
+The page reads `GET /api/overview` and `GET /api/runs?status=`, both usable on their own.
+
 ## Defining a workflow
 
 Register a `WorkflowDefinition` bean. Each step returns a map that is saved as JSON and passed to later steps.
@@ -113,7 +125,8 @@ curl -X POST localhost:8080/api/schedules -H 'Content-Type: application/json' -d
 | GET | `/api/workflows` | Registered workflows and their steps |
 | POST | `/api/runs` | Start a run: `{"workflowType": "order-fulfilment", "input": {...}}` → `201` with `Location` |
 | GET | `/api/runs/{id}` | A run with all of its steps |
-| GET | `/api/runs?limit=20` | Most recent runs |
+| GET | `/api/runs?limit=20&status=FAILED` | Most recent runs, optionally one status |
+| GET | `/api/overview` | Run counts by status, queue state, last-hour results |
 
 ### Idempotent starts
 
@@ -264,5 +277,5 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Lease expiry recovery when a worker crashes mid-step, with lease heartbeats
 - [x] Chaos tests: kill workers mid-run and check nothing is lost or stuck
 - [x] Metrics with Micrometer and Prometheus
-- [ ] Web dashboard of runs and steps
+- [x] Web dashboard of runs and steps
 - [ ] Demo workflow: order fulfilment

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StepFlow</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #667085; --line: #e3e6eb;
+    --accent: #2f5bea; --ok: #1a7f4b; --warn: #b26a00; --bad: #c43434; --info: #3b6fd6;
+    --chip: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --panel: #1a1e25; --text: #e7eaee; --muted: #8b95a5; --line: #2a303a;
+      --accent: #6b8cff; --ok: #4cc38a; --warn: #e0a243; --bad: #ef6b6b; --info: #7ea2f5;
+      --chip: #232933;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line);
+           background: var(--panel); }
+  h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); }
+  header .live { margin-left: auto; color: var(--muted); font-size: 12px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .n { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .l { color: var(--muted); font-size: 12px; }
+  .card.bad .n { color: var(--bad); } .card.ok .n { color: var(--ok); } .card.warn .n { color: var(--warn); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  section > h2 { font-size: 13px; margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--muted);
+                 font-weight: 600; text-transform: uppercase; letter-spacing: .04em; display: flex; gap: 8px; align-items: center; }
+  .filters { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  button, select, textarea, input { font: inherit; color: var(--text); background: var(--panel);
+         border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr.run { cursor: pointer; } tr.run:hover td { background: var(--chip); }
+  tr:last-child td { border-bottom: 0; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--chip); }
+  .COMPLETED, .SUCCEEDED { color: var(--ok); } .FAILED, .DEAD { color: var(--bad); }
+  .RUNNING, .LEASED, .PENDING { color: var(--info); } .COMPENSATING, .COMPENSATED, .RETRY_SCHEDULED { color: var(--warn); }
+  .CANCELLED { color: var(--muted); }
+  .steps td { background: var(--bg); padding: 6px 14px 6px 34px; border-bottom: 1px solid var(--line); }
+  .err { color: var(--bad); }
+  .muted { color: var(--muted); }
+  form { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; padding: 12px 14px; align-items: start; }
+  textarea { width: 100%; min-height: 34px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .empty { padding: 18px 14px; color: var(--muted); }
+  .msg { padding: 0 14px 12px; min-height: 18px; }
+  @media (max-width: 640px) { form { grid-template-columns: 1fr; } th:nth-child(4), td:nth-child(4) { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>StepFlow</h1><span class="sub">durable workflow engine</span>
+  <span class="live" id="live">connecting…</span>
+</header>
+<main>
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>Start a run</h2>
+    <form id="start">
+      <select id="wf" aria-label="Workflow"></select>
+      <textarea id="input" aria-label="Input JSON" placeholder='Input as JSON, for example {"orderId": "A-1"}'></textarea>
+      <button class="primary" type="submit">Start</button>
+    </form>
+    <div class="msg" id="msg"></div>
+  </section>
+
+  <section>
+    <h2>Runs <span class="filters" id="filters"></span></h2>
+    <table>
+      <thead><tr><th>Status</th><th>Workflow</th><th>Started</th><th>Run</th></tr></thead>
+      <tbody id="runs"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+(function () {
+  var STATUSES = ["PENDING", "RUNNING", "COMPENSATING", "COMPLETED", "COMPENSATED", "FAILED", "CANCELLED"];
+  var filter = "";
+  var open = {};          // run id -> true when its steps are expanded
+  var stepsCache = {};    // run id -> steps
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;   // textContent only: run data is never parsed as HTML
+    return e;
+  }
+  function pill(status) { return el("span", "pill " + status, status); }
+  function ago(iso) {
+    if (!iso) return "";
+    var s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  }
+  function inFuture(iso) {
+    var s = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+    if (s <= 0) return "now";
+    if (s < 60) return "in " + s + "s";
+    if (s < 3600) return "in " + Math.round(s / 60) + "m";
+    return "in " + Math.round(s / 3600) + "h";
+  }
+  function get(url) {
+    return fetch(url).then(function (r) { if (!r.ok) throw new Error(url + " " + r.status); return r.json(); });
+  }
+
+  function card(label, n, cls) {
+    var c = el("div", "card " + (cls || ""));
+    c.appendChild(el("div", "n", String(n)));
+    c.appendChild(el("div", "l", label));
+    return c;
+  }
+
+  function renderOverview(o) {
+    var box = document.getElementById("cards");
+    box.textContent = "";
+    var active = o.runs.PENDING + o.runs.RUNNING + o.runs.COMPENSATING;
+    box.appendChild(card("runs in progress", active));
+    box.appendChild(card("steps ready to run", o.runnableSteps, o.runnableSteps > 0 && o.oldestRunnableSecs > 30 ? "warn" : ""));
+    box.appendChild(card("steps running", o.leasedSteps));
+    box.appendChild(card("steps waiting (retry, sleep)", o.waitingSteps));
+    box.appendChild(card("oldest ready step (s)", o.oldestRunnableSecs, o.oldestRunnableSecs > 30 ? "warn" : ""));
+    box.appendChild(card("completed, last hour", o.finishedLastHour.COMPLETED, "ok"));
+    box.appendChild(card("rolled back, last hour", o.finishedLastHour.COMPENSATED, o.finishedLastHour.COMPENSATED ? "warn" : ""));
+    box.appendChild(card("failed, last hour", o.finishedLastHour.FAILED, o.finishedLastHour.FAILED ? "bad" : ""));
+    box.appendChild(card("schedules on / paused", o.schedules.enabled + " / " + o.schedules.paused));
+  }
+
+  function renderFilters(counts) {
+    var box = document.getElementById("filters");
+    box.textContent = "";
+    [""].concat(STATUSES).forEach(function (s) {
+      var b = el("button", filter === s ? "on" : "", (s === "" ? "all" : s.toLowerCase()) + " (" + counts[s] + ")");
+      b.onclick = function () { filter = s; refresh(); };
+      box.appendChild(b);
+    });
+  }
+
+  function stepsRow(run) {
+    var tr = el("tr", "steps");
+    var td = el("td"); td.colSpan = 4;
+    var steps = stepsCache[run.id];
+    if (!steps) { td.appendChild(el("span", "muted", "loading steps…")); }
+    else {
+      steps.forEach(function (st) {
+        var line = el("div");
+        line.appendChild(pill(st.status));
+        line.appendChild(el("span", "", " " + (st.kind === "COMPENSATION" ? "undo " : "") + st.stepName));
+        var meta = " attempt " + st.attempt + "/" + st.maxAttempts;
+        if ((st.status === "PENDING" || st.status === "RETRY_SCHEDULED") && st.nextRunAt) meta += ", runs " + inFuture(st.nextRunAt);
+        if (st.status === "LEASED") meta += ", on " + st.leaseOwner;
+        line.appendChild(el("span", "muted", meta));
+        if (st.lastError) line.appendChild(el("div", "err mono", st.lastError));
+        td.appendChild(line);
+      });
+      if (run.error) td.appendChild(el("div", "err mono", "run: " + run.error));
+    }
+    tr.appendChild(td);
+    return tr;
+  }
+
+  function renderRuns(runs) {
+    var body = document.getElementById("runs");
+    body.textContent = "";
+    if (!runs.length) {
+      var tr = el("tr"); var td = el("td", "empty", "No runs yet. Start one above."); td.colSpan = 4;
+      tr.appendChild(td); body.appendChild(tr);
+      return;
+    }
+    runs.forEach(function (run) {
+      var tr = el("tr", "run");
+      var s = el("td"); s.appendChild(pill(run.status)); tr.appendChild(s);
+      tr.appendChild(el("td", "", run.workflowType));
+      tr.appendChild(el("td", "muted", ago(run.createdAt)));
+      tr.appendChild(el("td", "mono muted", run.id.substring(0, 8)));
+      tr.onclick = function () {
+        if (open[run.id]) { delete open[run.id]; renderRuns(runs); }
+        else { open[run.id] = true; loadSteps(run.id).then(function () { renderRuns(runs); }); }
+      };
+      body.appendChild(tr);
+      if (open[run.id]) body.appendChild(stepsRow(run));
+    });
+  }
+
+  function loadSteps(id) {
+    return get("/api/runs/" + id).then(function (r) { stepsCache[id] = r.steps; });
+  }
+
+  var lastRuns = [];
+  function refresh() {
+    return Promise.all([
+      get("/api/overview"),
+      get("/api/runs?limit=30" + (filter ? "&status=" + filter : ""))
+    ]).then(function (res) {
+      var counts = Object.assign({ "": 0 }, res[0].runs);
+      counts[""] = STATUSES.reduce(function (a, s) { return a + res[0].runs[s]; }, 0);
+      renderOverview(res[0]);
+      renderFilters(counts);
+      lastRuns = res[1];
+      var ids = Object.keys(open).filter(function (id) { return lastRuns.some(function (r) { return r.id === id; }); });
+      return Promise.all(ids.map(loadSteps));
+    }).then(function () {
+      renderRuns(lastRuns);
+      document.getElementById("live").textContent = "live · updated " + new Date().toLocaleTimeString();
+    }).catch(function (e) {
+      document.getElementById("live").textContent = "disconnected: " + e.message;
+    });
+  }
+
+  get("/api/workflows").then(function (list) {
+    var sel = document.getElementById("wf");
+    list.forEach(function (w) {
+      var o = el("option", "", w.type + " (" + w.steps.length + " steps)");
+      o.value = w.type; sel.appendChild(o);
+    });
+    if (!list.length) sel.appendChild(el("option", "", "no workflows registered"));
+  });
+
+  document.getElementById("start").onsubmit = function (ev) {
+    ev.preventDefault();
+    var msg = document.getElementById("msg");
+    var text = document.getElementById("input").value.trim();
+    var input = {};
+    try { if (text) input = JSON.parse(text); } catch (e) { msg.textContent = "Input is not valid JSON."; msg.className = "msg err"; return; }
+    fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflowType: document.getElementById("wf").value, input: input }) })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        msg.className = res.ok ? "msg" : "msg err";
+        msg.textContent = res.ok ? "Started run " + res.body.id : (res.body.detail || "Could not start the run");
+        refresh();
+      });
+  };
+
+  refresh();
+  setInterval(refresh, 2000);
+})();
+</script>
+</body>
+</html>

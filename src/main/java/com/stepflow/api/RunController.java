@@ -1,6 +1,7 @@
 package com.stepflow.api;
 
 import com.stepflow.definition.WorkflowRegistry;
+import com.stepflow.domain.RunStatus;
 import com.stepflow.run.RunService;
 import com.stepflow.run.WorkflowRun;
 import jakarta.validation.Valid;
@@ -25,10 +26,17 @@ public class RunController {
 
     private final RunService runService;
     private final WorkflowRegistry registry;
+    private final OverviewService overviewService;
 
-    public RunController(RunService runService, WorkflowRegistry registry) {
+    public RunController(RunService runService, WorkflowRegistry registry, OverviewService overviewService) {
         this.runService = runService;
         this.registry = registry;
+        this.overviewService = overviewService;
+    }
+
+    @GetMapping("/overview")
+    public Overview overview() {
+        return overviewService.overview();
     }
 
     @GetMapping("/workflows")
@@ -63,8 +71,9 @@ public class RunController {
     }
 
     @GetMapping("/runs")
-    public List<RunResponse> recent(@RequestParam(defaultValue = "20") int limit) {
-        return runService.recent(limit).stream()
+    public List<RunResponse> recent(@RequestParam(defaultValue = "20") int limit,
+                                    @RequestParam(required = false) RunStatus status) {
+        return runService.recent(status, limit).stream()
                 .map(run -> RunResponse.of(run, List.of()))
                 .toList();
     }

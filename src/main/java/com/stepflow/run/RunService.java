@@ -3,6 +3,7 @@ package com.stepflow.run;
 import com.stepflow.definition.StepDefinition;
 import com.stepflow.definition.WorkflowDefinition;
 import com.stepflow.definition.WorkflowRegistry;
+import com.stepflow.domain.RunStatus;
 import com.stepflow.domain.StepKind;
 import com.stepflow.metrics.StepMetrics;
 import org.springframework.stereotype.Service;
@@ -106,6 +107,10 @@ public class RunService {
     }
 
     public List<WorkflowRun> recent(int limit) {
-        return runs.findRecentRuns(Math.max(1, Math.min(limit, 100)));
+        return recent(null, limit);
+    }
+
+    public List<WorkflowRun> recent(RunStatus status, int limit) {
+        return runs.findRecentRuns(status, Math.max(1, Math.min(limit, 100)));
     }
 }

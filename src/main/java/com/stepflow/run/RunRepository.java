@@ -82,7 +82,16 @@ public class RunRepository {
     }
 
     public List<WorkflowRun> findRecentRuns(int limit) {
-        return jdbc.query("SELECT * FROM workflow_runs ORDER BY created_at DESC LIMIT ?", runMapper, limit);
+        return findRecentRuns(null, limit);
+    }
+
+    /** @param status only runs in this status, or null for all */
+    public List<WorkflowRun> findRecentRuns(RunStatus status, int limit) {
+        if (status == null) {
+            return jdbc.query("SELECT * FROM workflow_runs ORDER BY created_at DESC LIMIT ?", runMapper, limit);
+        }
+        return jdbc.query("SELECT * FROM workflow_runs WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                runMapper, status.name(), limit);
     }
 
     public List<StepExecution> findSteps(UUID runId) {
