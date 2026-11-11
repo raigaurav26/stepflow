@@ -265,6 +265,17 @@ Tests need the same PostgreSQL (`docker compose up -d`, then `mvn verify`). CI s
 
 Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER` and `STEPFLOW_DB_PASSWORD`.
 
+## Demo: order fulfilment
+
+With `STEPFLOW_DEMO_ENABLED=true` the app registers an `order-fulfilment` workflow: reserve stock, charge card (retried with backoff), an optional cooling-off timer, then ship. Each step has a compensation, so a declined card releases the stock and a shipping failure refunds the card and then releases the stock.
+
+```bash
+docker compose up --build      # Postgres + app with the demo enabled, port 8080
+./scripts/demo.sh              # posts a mix of good, flaky, declined and failing orders
+```
+
+Open http://localhost:8080/ to watch the runs on the dashboard.
+
 ## Roadmap
 
 - [x] Project setup, schema and status state machines
@@ -278,4 +289,4 @@ Connection settings can be overridden with `STEPFLOW_DB_URL`, `STEPFLOW_DB_USER`
 - [x] Chaos tests: kill workers mid-run and check nothing is lost or stuck
 - [x] Metrics with Micrometer and Prometheus
 - [x] Web dashboard of runs and steps
-- [ ] Demo workflow: order fulfilment
+- [x] Demo workflow: order fulfilment, Dockerfile and Docker Compose

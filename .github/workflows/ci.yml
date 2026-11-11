@@ -34,3 +34,6 @@ jobs:
 
       - name: Build and test
         run: mvn -B verify
+
+      - name: Build Docker image
+        run: docker build -t stepflow:ci .

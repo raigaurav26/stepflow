@@ -18,6 +18,11 @@ stepflow:
   scheduler:
     enabled: ${STEPFLOW_SCHEDULER_ENABLED:true}
     poll-interval: 1s
+  demo:
+    enabled: ${STEPFLOW_DEMO_ENABLED:false}
+    cooling-off: 10s
+    retry-delay: 1s
+    latency: 300ms
   retry:
     initial-delay: 1s
     multiplier: 2.0
