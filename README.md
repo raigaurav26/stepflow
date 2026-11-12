@@ -41,6 +41,26 @@ LEASED → PENDING   (lease expired: the worker crashed)
 
 Status transitions are enforced in code (`RunStatus`, `StepStatus`) and status values by `CHECK` constraints in the schema.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    Client([Client / dashboard]) -->|POST /api/runs| API[REST API]
+    Sched[SchedulerLoop<br/>cron + delayed starts] -->|idempotent start| Svc
+    API --> Svc[RunService]
+    Svc -->|insert run + first step| PG[(PostgreSQL<br/>workflow_runs<br/>step_executions<br/>schedules)]
+    subgraph Worker instance
+      Pool[WorkerPool<br/>claim with FOR UPDATE SKIP LOCKED] --> Exec[StepExecutor<br/>retry / backoff / saga]
+      Reaper[LeaseReaper] 
+    end
+    Pool <-->|lease + heartbeat| PG
+    Exec -->|result, next step, compensation| PG
+    Reaper -->|expired leases back to PENDING| PG
+    Exec --> Metrics[Micrometer<br/>/actuator/prometheus]
+```
+
+Every state change is a row in PostgreSQL. Workers hold no state, so any number of instances can run side by side: `SKIP LOCKED` hands each runnable step to exactly one of them, and a lease owner check guards every write.
+
 ## Dashboard
 
 Open `http://localhost:8080/` for a live view of the system (it refreshes every 2 seconds, no build step, no external scripts):
@@ -276,6 +296,20 @@ docker compose up --build      # Postgres + app with the demo enabled, port 8080
 
 Open http://localhost:8080/ to watch the runs on the dashboard.
 
+## Benchmark
+
+Opt-in test: `mvn test -Dtest=ThroughputBenchmark -Dstepflow.bench=true -Dstepflow.worker.threads=N`. It submits 2000 runs of a 3-step no-op workflow (6000 steps) while workers are live and times it until every run completes.
+
+Measured on a 4-core cloud container with PostgreSQL 16 on the same machine, default settings (single instance, so numbers are indicative, not a tuned result):
+
+| Worker threads | Total time | Runs/s | Steps/s |
+|---|---|---|---|
+| 1 | 18.2 s | 110 | 329 |
+| 4 | 9.3 s | 216 | 647 |
+| 8 | 5.8 s | 345 | 1034 |
+
+Throughput scales with threads because claims never block each other. Part of the time is the client inserting runs one at a time through the service layer.
+
 ## Roadmap
 
 - [x] Project setup, schema and status state machines
@@ -290,3 +324,5 @@ Open http://localhost:8080/ to watch the runs on the dashboard.
 - [x] Metrics with Micrometer and Prometheus
 - [x] Web dashboard of runs and steps
 - [x] Demo workflow: order fulfilment, Dockerfile and Docker Compose
+- [x] Architecture diagram and throughput benchmark
+- [ ] Final polish
