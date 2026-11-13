@@ -325,4 +325,4 @@ Throughput scales with threads because claims never block each other. Part of th
 - [x] Web dashboard of runs and steps
 - [x] Demo workflow: order fulfilment, Dockerfile and Docker Compose
 - [x] Architecture diagram and throughput benchmark
-- [ ] Final polish
+- [x] Final polish
